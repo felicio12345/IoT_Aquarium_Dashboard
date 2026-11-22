@@ -1,0 +1,1010 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Guppy Aqua Monitor</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; background-color: #0b1120; color: #e2e8f0; }
+    .mono { font-family: 'JetBrains Mono', monospace; }
+    .glass-card {
+      background: rgba(15, 23, 42, 0.85);
+      border: 1px solid rgba(51, 65, 85, 0.7);
+      backdrop-filter: blur(12px);
+    }
+    input[type="range"] { accent-color: #38bdf8; }
+  </style>
+</head>
+<body class="min-h-screen pb-12">
+
+  <!-- ===== NAVBAR: judul + 3 badge status (MOSFET pH, Cloud, ESP32) ===== -->
+  <header class="border-b border-slate-800 bg-slate-950/80 sticky top-0 z-30 backdrop-blur">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex flex-wrap items-center justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-sky-500/15 border border-sky-400/30 flex items-center justify-center text-sky-400">
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+          </svg>
+        </div>
+        <div>
+          <h1 class="text-lg font-bold tracking-tight text-white">Guppy Aqua Monitor</h1>
+          <p class="text-xs text-slate-400">Hybrid Edge-Cloud IoT & Rule-Based Water Quality System</p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2.5 flex-wrap">
+        <!-- Status MOSFET pH (ada hitung mundur dari data ESP32) -->
+        <div id="mosfetBadge" class="mono px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800/90 border border-slate-700 text-slate-300 flex items-center gap-2">
+          <span id="mosfetDot" class="w-2 h-2 rounded-full bg-slate-500"></span>
+          <span id="mosfetText">pH MOSFET: Memuat...</span>
+        </div>
+
+        <!-- Status koneksi ke Firebase -->
+        <div id="cloudBadge" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-500/10 border border-amber-500/30 text-amber-300 flex items-center gap-2">
+          <span id="cloudDot" class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+          <span id="cloudText">Cloud: Menghubungkan...</span>
+        </div>
+
+        <!-- Status ESP32 (dicek dari uptime_ms, masih berubah atau tidak) -->
+        <div id="espBadge" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 border border-slate-700 text-slate-300 flex items-center gap-2">
+          <span id="espDot" class="w-2 h-2 rounded-full bg-slate-500"></span>
+          <span id="espText">ESP32: Mengecek...</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 pt-6 space-y-6">
+
+    <!-- ===== BANNER HASIL EVALUASI RULE-BASED ===== -->
+    <section id="evalBanner" class="glass-card rounded-2xl p-5 border-l-4 border-l-emerald-500 transition-all space-y-4">
+      <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div class="space-y-2">
+          <div class="flex items-center gap-2.5 flex-wrap">
+            <span id="evalStatusBadge" class="px-2.5 py-0.5 rounded-md text-xs font-bold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+              MEMUAT STATUS
+            </span>
+            <span id="activeProfileHeaderPill" class="px-2.5 py-0.5 rounded-md text-xs font-semibold bg-sky-500/15 text-sky-300 border border-sky-500/30">
+              Profil: Ikan Guppy
+            </span>
+          </div>
+          <p id="evalRecommendation" class="text-sm text-slate-200 leading-relaxed">
+            Menunggu sinkronisasi data sensor dari ESP32...
+          </p>
+        </div>
+        <div class="text-right shrink-0">
+          <p class="text-[11px] uppercase tracking-wider text-slate-500">Pembaruan Terakhir</p>
+          <p id="lastUpdateText" class="mono text-xs text-slate-300 mt-0.5">--:--:--</p>
+        </div>
+      </div>
+
+      <!-- Daftar rule yang sedang aktif (R1, R2, dst) -->
+      <div class="pt-3 border-t border-slate-800/90 flex items-center gap-2 flex-wrap">
+        <span class="text-xs font-medium text-slate-400">Detail Rule Aktif:</span>
+        <div id="evalRulesContainer" class="flex items-center gap-1.5 flex-wrap">
+          <span class="mono text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">-</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== 3 KARTU SENSOR: suhu, pH, kekeruhan ===== -->
+    <section class="grid grid-cols-1 md:grid-cols-3 gap-5">
+      <!-- Suhu -->
+      <div class="glass-card rounded-2xl p-5 relative overflow-hidden">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">Suhu Air</span>
+          <span id="tempSourceBadge" class="mono text-[11px] px-2 py-0.5 rounded bg-sky-500/15 text-sky-300 border border-sky-500/30">
+            DS18B20
+          </span>
+        </div>
+        <div class="mt-4 flex items-baseline gap-2">
+          <span id="valTemp" class="mono text-4xl font-bold text-white">--.-</span>
+          <span class="text-lg font-medium text-slate-400">°C</span>
+        </div>
+        <div class="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
+          <span id="cardFishNameTemp">Baku Mutu: Ikan Guppy</span>
+          <span id="rangeTempLabel" class="mono text-slate-300">25.0 - 28.0 °C</span>
+        </div>
+      </div>
+
+      <!-- pH -->
+      <div class="glass-card rounded-2xl p-5 relative overflow-hidden">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">Derajat Keasaman (pH)</span>
+          <span id="phSourceBadge" class="mono text-[11px] px-2 py-0.5 rounded bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">
+            PH-4502C
+          </span>
+        </div>
+        <div class="mt-4 flex items-baseline gap-2">
+          <span id="valPh" class="mono text-4xl font-bold text-white">-.--</span>
+          <span class="text-sm font-medium text-slate-400">pH</span>
+        </div>
+        <div class="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
+          <span id="cardFishNamePh">Baku Mutu: Ikan Guppy</span>
+          <span id="rangePhLabel" class="mono text-slate-300">6.5 - 8.0 pH</span>
+        </div>
+      </div>
+
+      <!-- Kekeruhan -->
+      <div class="glass-card rounded-2xl p-5 relative overflow-hidden">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">Kekeruhan Air</span>
+          <span id="ntuSourceBadge" class="mono text-[11px] px-2 py-0.5 rounded bg-teal-500/15 text-teal-300 border border-teal-500/30">
+            TSW-30
+          </span>
+        </div>
+        <div class="mt-4 flex items-baseline gap-2">
+          <span id="valNtu" class="mono text-4xl font-bold text-white">---</span>
+          <span class="text-sm font-medium text-slate-400">NTU</span>
+        </div>
+        <div class="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
+          <span>Batas Maksimal</span>
+          <span id="rangeNtuLabel" class="mono text-slate-300">&lt; 25 NTU (+5/jam)</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== GRAFIK REALTIME ===== -->
+    <section class="glass-card rounded-2xl p-5">
+      <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
+        <div>
+          <h2 class="text-sm font-bold text-white">Grafik Pemantauan Real-Time</h2>
+          <p class="text-xs text-slate-400">Skala Y statis 0 – 100 (kelipatan 20) untuk pemantauan Suhu, pH, dan NTU</p>
+        </div>
+        <button onclick="resetChart()" class="text-xs px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition">
+          Reset Grafik
+        </button>
+      </div>
+      <div class="h-64 w-full">
+        <canvas id="telemetryChart"></canvas>
+      </div>
+    </section>
+
+    <!-- ===== PANEL BAWAH: profil ikan (kiri) dan simulasi sensor (kanan) ===== -->
+    <section class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+      <!-- Kiri: manajemen profil ikan (maks 5), disinkronkan ke ESP32 lewat Firebase -->
+      <div class="glass-card rounded-2xl p-6 space-y-5">
+        <div class="flex items-start justify-between gap-2">
+          <div>
+            <div class="flex items-center gap-2">
+              <h2 class="text-base font-bold text-white">Profile Ikan & Baku Mutu</h2>
+              <span id="profileQuotaBadge" class="mono text-[11px] px-2 py-0.5 rounded bg-slate-800 text-sky-300 border border-slate-700">
+                3/5 Profil
+              </span>
+            </div>
+            <p class="text-xs text-slate-400 mt-0.5">Pilih atau sesuaikan profil ikan (maks. 5 profil). Otomatis sinkron ke NVS ESP32.</p>
+          </div>
+          <button type="button" id="btnAddProfile" onclick="createNewProfile()"
+            class="text-xs px-3 py-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 font-semibold transition disabled:opacity-40 disabled:cursor-not-allowed">
+            + Tambah Profil
+          </button>
+        </div>
+
+        <!-- Tombol-tombol pilihan profil (diisi lewat JavaScript) -->
+        <div id="profileSelectorContainer" class="flex items-center gap-2 flex-wrap p-2.5 rounded-xl bg-slate-900/90 border border-slate-800">
+        </div>
+
+        <form id="configForm" onsubmit="saveActiveProfile(event)" class="space-y-4">
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1">Nama Spesies / Profil Ikan</label>
+            <input type="text" id="cfgFishName" maxlength="24" required
+              placeholder="Contoh: Ikan Guppy"
+              class="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-sm text-white focus:outline-none focus:border-sky-400">
+          </div>
+
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs font-medium text-slate-400 mb-1">Suhu Minimum (°C)</label>
+              <input type="number" step="0.1" id="cfgTempMin" required
+                class="mono w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-sm text-white focus:outline-none focus:border-sky-400">
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-400 mb-1">Suhu Maksimum (°C)</label>
+              <input type="number" step="0.1" id="cfgTempMax" required
+                class="mono w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-sm text-white focus:outline-none focus:border-sky-400">
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs font-medium text-slate-400 mb-1">pH Minimum</label>
+              <input type="number" step="0.1" id="cfgPhMin" required
+                class="mono w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-sm text-white focus:outline-none focus:border-sky-400">
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-400 mb-1">pH Maksimum</label>
+              <input type="number" step="0.1" id="cfgPhMax" required
+                class="mono w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-sm text-white focus:outline-none focus:border-sky-400">
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs font-medium text-slate-400 mb-1">Kekeruhan Maks (NTU)</label>
+              <input type="number" step="1" min="0" max="100" id="cfgNtuMax" required
+                class="mono w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-sm text-white focus:outline-none focus:border-sky-400">
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-400 mb-1">Tren Kekeruhan (NTU/jam)</label>
+              <input type="number" step="1" min="0" max="100" id="cfgTrendTh" required
+                class="mono w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-sm text-white focus:outline-none focus:border-sky-400">
+            </div>
+          </div>
+
+          <div class="pt-2 flex flex-wrap items-center justify-between gap-3">
+            <div class="flex items-center gap-2">
+              <button type="button" id="btnDeleteProfile" onclick="deleteActiveProfile()"
+                class="px-3 py-2 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 font-semibold text-xs transition disabled:opacity-40 disabled:cursor-not-allowed">
+                Hapus Profil
+              </button>
+              <span id="cfgSaveFeedback" class="text-xs text-emerald-400 opacity-0 transition-opacity">Profil tersimpan ke NVS!</span>
+            </div>
+            <button type="submit" class="px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold text-xs transition shadow-lg shadow-sky-500/20">
+              Simpan & Terapkan Profil
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <!-- Kanan: simulasi sensor untuk menguji rule R1 - R10 -->
+      <div class="glass-card rounded-2xl p-6 space-y-5">
+        <div class="flex items-start justify-between gap-2">
+          <div>
+            <h2 class="text-base font-bold text-white">Simulasi Virtual Sensor (Testing Rule)</h2>
+            <p class="text-xs text-slate-400 mt-0.5">Override pembacaan fisik untuk menguji logika inferensi R1–R10.</p>
+          </div>
+          <button onclick="disableAllSimulations()" class="text-xs px-2.5 py-1 rounded bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30">
+            Matikan Semua
+          </button>
+        </div>
+
+        <div class="space-y-4">
+          <!-- Override suhu (0 - 100 °C) -->
+          <div class="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2">
+            <div class="flex items-center justify-between">
+              <label class="flex items-center gap-2 text-xs font-semibold text-slate-200 cursor-pointer">
+                <input type="checkbox" id="simOvTemp" onchange="pushSimulation()" class="w-4 h-4 rounded">
+                <span>Override Suhu (°C)</span>
+              </label>
+              <span id="simValTempLabel" class="mono text-xs font-bold text-sky-400">26.5 °C</span>
+            </div>
+            <input type="range" id="simSliderTemp" min="0" max="100" step="0.5" value="26.5"
+              oninput="document.getElementById('simValTempLabel').textContent = parseFloat(this.value).toFixed(1) + ' °C'"
+              onchange="pushSimulation()" class="w-full">
+          </div>
+
+          <!-- Override pH (0 - 14) -->
+          <div class="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2">
+            <div class="flex items-center justify-between">
+              <label class="flex items-center gap-2 text-xs font-semibold text-slate-200 cursor-pointer">
+                <input type="checkbox" id="simOvPh" onchange="pushSimulation()" class="w-4 h-4 rounded">
+                <span>Override pH</span>
+              </label>
+              <span id="simValPhLabel" class="mono text-xs font-bold text-indigo-400">7.2</span>
+            </div>
+            <input type="range" id="simSliderPh" min="0.0" max="14.0" step="0.1" value="7.2"
+              oninput="document.getElementById('simValPhLabel').textContent = parseFloat(this.value).toFixed(1)"
+              onchange="pushSimulation()" class="w-full">
+          </div>
+
+          <!-- Override kekeruhan (0 - 100 NTU) -->
+          <div class="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2">
+            <div class="flex items-center justify-between">
+              <label class="flex items-center gap-2 text-xs font-semibold text-slate-200 cursor-pointer">
+                <input type="checkbox" id="simOvNtu" onchange="pushSimulation()" class="w-4 h-4 rounded">
+                <span>Override Kekeruhan (NTU)</span>
+              </label>
+              <span id="simValNtuLabel" class="mono text-xs font-bold text-teal-400">12 NTU</span>
+            </div>
+            <input type="range" id="simSliderNtu" min="0" max="100" step="1" value="12"
+              oninput="document.getElementById('simValNtuLabel').textContent = this.value + ' NTU'"
+              onchange="pushSimulation()" class="w-full">
+          </div>
+
+          <!-- Pemicu rule R9 (tren kekeruhan naik) -->
+          <div class="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 flex items-center justify-between">
+            <div>
+              <p class="text-xs font-semibold text-slate-200">Simulasi Lonjakan Tren (Rule R9)</p>
+              <p class="text-[11px] text-slate-400">Memicu kondisi peningkatan kekeruhan &ge; ambang batas per jam</p>
+            </div>
+            <input type="checkbox" id="simTrendR9" onchange="pushSimulation()" class="w-4 h-4 rounded cursor-pointer">
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <script>
+    // =====================================================
+    // 1. PENGATURAN DASAR
+    // =====================================================
+
+    // Alamat Realtime Database Firebase (dipakai ESP32 juga)
+    const FIREBASE_HOST = "https://aquarium-monitor-guppy-default-rtdb.asia-southeast1.firebasedatabase.app";
+
+    // Jumlah profil ikan maksimal
+    const MAX_FISH_PROFILES = 5;
+
+    // Profil bawaan, dipakai kalau di Firebase belum ada data profil
+    const DEFAULT_FISH_PROFILES = {
+      active_id: "guppy",
+      list: {
+        guppy: {
+          nama: "Ikan Guppy",
+          suhu_min: 25.0, suhu_max: 28.0,
+          ph_min: 6.5, ph_max: 8.0,
+          turbidity_max: 25, trend_threshold: 5
+        },
+        cupang: {
+          nama: "Ikan Cupang",
+          suhu_min: 24.0, suhu_max: 30.0,
+          ph_min: 6.5, ph_max: 7.5,
+          turbidity_max: 25, trend_threshold: 5
+        },
+        neon_tetra: {
+          nama: "Neon Tetra",
+          suhu_min: 21.0, suhu_max: 26.0,
+          ph_min: 5.5, ph_max: 7.0,
+          turbidity_max: 15, trend_threshold: 5
+        }
+      }
+    };
+
+    // Class Tailwind untuk badge, disimpan di sini supaya tidak ditulis berulang-ulang
+    const CLS_BADGE_ESP_ONLINE  = "px-3 py-1.5 rounded-lg text-xs font-semibold bg-sky-500/10 border border-sky-500/30 text-sky-300 flex items-center gap-2";
+    const CLS_BADGE_OFFLINE     = "px-3 py-1.5 rounded-lg text-xs font-semibold bg-rose-500/10 border border-rose-500/30 text-rose-300 flex items-center gap-2";
+    const CLS_BADGE_CLOUD_ON    = "px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 flex items-center gap-2";
+    const CLS_MOSFET_NORMAL     = "mono px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800/90 border border-slate-700 text-slate-300 flex items-center gap-2";
+    const CLS_MOSFET_OFFLINE    = "mono px-3 py-1.5 rounded-lg text-xs font-medium bg-rose-500/10 border border-rose-500/30 text-rose-300 flex items-center gap-2";
+
+    // =====================================================
+    // 2. VARIABEL KONDISI (state)
+    // =====================================================
+
+    let profilesState = JSON.parse(JSON.stringify(DEFAULT_FISH_PROFILES)); // salinan profil bawaan
+
+    let lastUptimeMs = null;        // nilai uptime_ms terakhir dari ESP32
+    let lastDataTimestamp = 0;      // kapan terakhir uptime_ms berubah
+    let isEspCurrentlyOnline = false;
+
+    let isEditingConfig = false;    // true kalau user sedang mengetik di form profil
+    let isEditingSim = false;       // true kalau user sedang menggeser slider simulasi
+    let simDebounceTimer = null;
+
+    // Data status pH MOSFET dari ESP32
+    let livePhState = "STANDBY";
+    let livePhRemainingSeconds = 0;
+    let livePhMosfetActive = false;
+
+    // =====================================================
+    // 3. GRAFIK (Chart.js)
+    // =====================================================
+
+    const ctx = document.getElementById('telemetryChart').getContext('2d');
+
+    const telemetryChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [
+          { label: 'Suhu (°C)',        data: [], borderColor: '#38bdf8', backgroundColor: 'rgba(56, 189, 248, 0.1)',  tension: 0.35, borderWidth: 2, pointRadius: 2 },
+          { label: 'pH',               data: [], borderColor: '#818cf8', backgroundColor: 'rgba(129, 140, 248, 0.1)', tension: 0.35, borderWidth: 2, pointRadius: 2 },
+          { label: 'Kekeruhan (NTU)',  data: [], borderColor: '#2dd4bf', backgroundColor: 'rgba(45, 212, 191, 0.1)',  tension: 0.35, borderWidth: 2, pointRadius: 2 }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { labels: { color: '#cbd5e1', font: { size: 11 } } }
+        },
+        scales: {
+          x: {
+            ticks: { color: '#64748b', font: { size: 10 } },
+            grid: { color: 'rgba(51, 65, 85, 0.3)' }
+          },
+          y: {
+            min: 0,
+            max: 100,
+            ticks: { stepSize: 20, color: '#94a3b8', font: { size: 10 } },
+            grid: { color: 'rgba(51, 65, 85, 0.3)' }
+          }
+        }
+      }
+    });
+
+    function resetChart() {
+      telemetryChart.data.labels = [];
+      telemetryChart.data.datasets.forEach(function (ds) {
+        ds.data = [];
+      });
+      telemetryChart.update();
+    }
+
+    // Tambah satu titik data ke grafik, simpan maksimal 25 titik
+    function addPointToChart(temperature, ph, ntu) {
+      const timeLabel = new Date().toLocaleTimeString('id-ID', { hour12: false });
+
+      if (telemetryChart.data.labels.length >= 25) {
+        telemetryChart.data.labels.shift();
+        telemetryChart.data.datasets.forEach(function (ds) {
+          ds.data.shift();
+        });
+      }
+
+      telemetryChart.data.labels.push(timeLabel);
+      telemetryChart.data.datasets[0].data.push(temperature);
+      telemetryChart.data.datasets[1].data.push(ph);
+      telemetryChart.data.datasets[2].data.push(ntu);
+      telemetryChart.update('none');
+    }
+
+    // =====================================================
+    // 4. FUNGSI BANTU
+    // =====================================================
+
+    // Tahan nilai di antara min dan max
+    function clamp(value, min, max) {
+      return Math.min(max, Math.max(min, value));
+    }
+
+    // Kalau nilai kosong (undefined/null) pakai nilai default.
+    // Sengaja tidak pakai "||" karena angka 0 itu valid (misal suhu simulasi 0 °C)
+    function valueOrDefault(value, defaultValue) {
+      if (value === undefined || value === null) {
+        return defaultValue;
+      }
+      return value;
+    }
+
+    // Supaya nama ikan yang diketik user tidak dianggap tag HTML
+    function escapeHtml(str) {
+      return String(str).replace(/[&<>"']/g, function (m) {
+        const escapeMap = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+        return escapeMap[m];
+      });
+    }
+
+    function showConfigFeedback(msg) {
+      const fb = document.getElementById('cfgSaveFeedback');
+      fb.textContent = msg;
+      fb.classList.remove('opacity-0');
+      setTimeout(function () {
+        fb.classList.add('opacity-0');
+      }, 3000);
+    }
+
+    // =====================================================
+    // 5. BADGE STATUS (Cloud, ESP32, MOSFET)
+    // =====================================================
+
+    function updateCloudUI(online) {
+      const badge = document.getElementById('cloudBadge');
+      const dot = document.getElementById('cloudDot');
+      const text = document.getElementById('cloudText');
+
+      if (online) {
+        badge.className = CLS_BADGE_CLOUD_ON;
+        dot.className = "w-2 h-2 rounded-full bg-emerald-400";
+        text.textContent = "Cloud: Terhubung";
+      } else {
+        badge.className = CLS_BADGE_OFFLINE;
+        dot.className = "w-2 h-2 rounded-full bg-rose-400";
+        text.textContent = "Cloud: Terputus";
+      }
+    }
+
+    function updateEspUI(online) {
+      isEspCurrentlyOnline = online;
+
+      const badge = document.getElementById('espBadge');
+      const dot = document.getElementById('espDot');
+      const text = document.getElementById('espText');
+
+      if (online) {
+        badge.className = CLS_BADGE_ESP_ONLINE;
+        dot.className = "w-2 h-2 rounded-full bg-sky-400 animate-pulse";
+        text.textContent = "ESP32: Online";
+      } else {
+        badge.className = CLS_BADGE_OFFLINE;
+        dot.className = "w-2 h-2 rounded-full bg-rose-400";
+        text.textContent = "ESP32: Offline";
+      }
+
+      // Status MOSFET ikut berubah kalau ESP32 offline
+      renderMosfetCounter();
+    }
+
+    // Dipanggil tiap 1 detik (lihat setInterval di bawah) supaya hitung mundurnya jalan
+    function renderMosfetCounter() {
+      const badge = document.getElementById('mosfetBadge');
+      const dot = document.getElementById('mosfetDot');
+      const text = document.getElementById('mosfetText');
+
+      // ESP32 mati, tidak ada yang perlu dihitung
+      if (!isEspCurrentlyOnline) {
+        badge.className = CLS_MOSFET_OFFLINE;
+        dot.className = "w-2 h-2 rounded-full bg-rose-400";
+        text.textContent = "pH MOSFET: ESP32 Offline";
+        return;
+      }
+
+      badge.className = CLS_MOSFET_NORMAL;
+
+      if (livePhState === "REALTIME") {
+        dot.className = "w-2 h-2 rounded-full bg-emerald-400 animate-ping";
+        text.textContent = "pH MOSFET: ON (Realtime Data)";
+
+      } else if (livePhState === "WARMUP") {
+        dot.className = "w-2 h-2 rounded-full bg-amber-400 animate-ping";
+        text.textContent = "pH MOSFET: WARMUP (" + livePhRemainingSeconds + "s)";
+        if (livePhRemainingSeconds > 0) livePhRemainingSeconds--;
+
+      } else if (livePhState === "SAMPLING" || livePhMosfetActive) {
+        dot.className = "w-2 h-2 rounded-full bg-emerald-400 animate-ping";
+        text.textContent = "pH MOSFET: READING ADC...";
+
+      } else {
+        // MOSFET mati, tampilkan hitung mundur sampai nyala lagi
+        dot.className = "w-2 h-2 rounded-full bg-slate-500";
+        const minutes = Math.floor(livePhRemainingSeconds / 60);
+        const seconds = livePhRemainingSeconds % 60;
+        const secondsStr = seconds < 10 ? "0" + seconds : seconds;
+        text.textContent = "pH MOSFET: OFF (" + minutes + "m " + secondsStr + "s)";
+        if (livePhRemainingSeconds > 0) livePhRemainingSeconds--;
+      }
+    }
+
+    // Badge sumber data: "SIMULASI" warna kuning, selain itu warna biru
+    function updateSourceBadge(elId, source) {
+      const el = document.getElementById(elId);
+      el.textContent = source;
+
+      if (source === 'SIMULASI') {
+        el.className = "mono text-[11px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold";
+      } else {
+        el.className = "mono text-[11px] px-2 py-0.5 rounded bg-sky-500/15 text-sky-300 border border-sky-500/30";
+      }
+    }
+
+    // =====================================================
+    // 6. PROFIL IKAN
+    // =====================================================
+
+    // Menampilkan profil ke layar: tombol pilihan, isi form, dan label di kartu sensor
+    function renderProfileUI() {
+      const list = profilesState.list || {};
+      const keys = Object.keys(list);
+      const count = keys.length;
+
+      // Kalau profil aktif tidak ditemukan, pakai profil pertama
+      if (!list[profilesState.active_id] && count > 0) {
+        profilesState.active_id = keys[0];
+      }
+
+      const activeProf = list[profilesState.active_id];
+      if (!activeProf) return;
+
+      // Kuota profil & tombol tambah/hapus
+      document.getElementById('profileQuotaBadge').textContent = count + "/" + MAX_FISH_PROFILES + " Profil";
+      document.getElementById('btnAddProfile').disabled = count >= MAX_FISH_PROFILES;
+      document.getElementById('btnDeleteProfile').disabled = count <= 1;
+
+      // Tombol pilihan profil
+      const container = document.getElementById('profileSelectorContainer');
+      let buttonsHtml = "";
+      keys.forEach(function (id) {
+        const p = list[id];
+        let cls;
+        if (id === profilesState.active_id) {
+          cls = "px-3 py-1.5 rounded-lg text-xs font-bold bg-sky-500 text-slate-950 shadow-sm transition cursor-pointer";
+        } else {
+          cls = "px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition cursor-pointer";
+        }
+        buttonsHtml += '<button type="button" onclick="selectProfile(\'' + id + '\')" class="' + cls + '">' + escapeHtml(p.nama) + '</button>';
+      });
+      container.innerHTML = buttonsHtml;
+
+      // Isi form, kecuali user lagi mengetik (biar ketikannya tidak ketimpa)
+      if (!isEditingConfig) {
+        document.getElementById('cfgFishName').value = activeProf.nama;
+        document.getElementById('cfgTempMin').value = activeProf.suhu_min;
+        document.getElementById('cfgTempMax').value = activeProf.suhu_max;
+        document.getElementById('cfgPhMin').value = activeProf.ph_min;
+        document.getElementById('cfgPhMax').value = activeProf.ph_max;
+        document.getElementById('cfgNtuMax').value = activeProf.turbidity_max;
+        document.getElementById('cfgTrendTh').value = activeProf.trend_threshold;
+      }
+
+      // Label di banner dan kartu sensor
+      document.getElementById('activeProfileHeaderPill').textContent = "Profil: " + activeProf.nama;
+      document.getElementById('cardFishNameTemp').textContent = "Baku Mutu: " + activeProf.nama;
+      document.getElementById('cardFishNamePh').textContent = "Baku Mutu: " + activeProf.nama;
+      document.getElementById('rangeTempLabel').textContent = Number(activeProf.suhu_min).toFixed(1) + " - " + Number(activeProf.suhu_max).toFixed(1) + " °C";
+      document.getElementById('rangePhLabel').textContent = Number(activeProf.ph_min).toFixed(1) + " - " + Number(activeProf.ph_max).toFixed(1) + " pH";
+      document.getElementById('rangeNtuLabel').textContent = "< " + activeProf.turbidity_max + " NTU (+" + activeProf.trend_threshold + "/jam)";
+    }
+
+    // Kirim semua profil ke /profiles, lalu kirim profil yang aktif ke /config.
+    // ESP32 membaca /config untuk dipakai sebagai batas rule-based
+    async function syncProfilesAndActiveConfigToFirebase() {
+      const activeProf = profilesState.list[profilesState.active_id];
+      if (!activeProf) return;
+
+      // 1) simpan semua profil
+      await fetch(FIREBASE_HOST + "/profiles.json", {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(profilesState)
+      });
+
+      // 2) simpan profil aktif saja (nama field disesuaikan dengan kode ESP32)
+      const activeConfigPayload = {
+        nama_ikan: activeProf.nama,
+        suhu_min: activeProf.suhu_min,
+        suhu_max: activeProf.suhu_max,
+        ph_min: activeProf.ph_min,
+        ph_max: activeProf.ph_max,
+        turbidity_max: activeProf.turbidity_max,
+        trend_threshold: activeProf.trend_threshold
+      };
+
+      await fetch(FIREBASE_HOST + "/config.json", {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(activeConfigPayload)
+      });
+    }
+
+    // Ambil profil dari Firebase (dipanggil berkala oleh profileSimPollLoop)
+    async function loadProfiles() {
+      if (isEditingConfig) return; // jangan ganggu user yang lagi mengetik
+
+      try {
+        const res = await fetch(FIREBASE_HOST + "/profiles.json", { cache: "no-store" });
+        const data = await res.json();
+
+        // Firebase masih kosong -> pakai profil bawaan lalu upload
+        if (!data || !data.list || Object.keys(data.list).length === 0) {
+          profilesState = JSON.parse(JSON.stringify(DEFAULT_FISH_PROFILES));
+          renderProfileUI();
+          await syncProfilesAndActiveConfigToFirebase();
+          return;
+        }
+
+        // Ambil maksimal 5 profil saja
+        const trimmedList = {};
+        Object.keys(data.list).slice(0, MAX_FISH_PROFILES).forEach(function (k) {
+          trimmedList[k] = data.list[k];
+        });
+
+        // Kalau active_id tidak valid, pakai profil pertama
+        let activeId = data.active_id;
+        if (!trimmedList[activeId]) {
+          activeId = Object.keys(trimmedList)[0];
+        }
+
+        profilesState = { active_id: activeId, list: trimmedList };
+        renderProfileUI();
+      } catch (e) {
+        // gagal ambil data, abaikan, nanti dicoba lagi di polling berikutnya
+      }
+    }
+
+    async function selectProfile(profileId) {
+      if (!profilesState.list[profileId]) return;
+
+      isEditingConfig = false;
+      profilesState.active_id = profileId;
+      renderProfileUI();
+      await syncProfilesAndActiveConfigToFirebase();
+      showConfigFeedback("Profil diaktifkan & disinkronkan ke ESP32!");
+    }
+
+    async function saveActiveProfile(e) {
+      e.preventDefault(); // cegah form reload halaman
+
+      const id = profilesState.active_id;
+      if (!profilesState.list[id]) return;
+
+      const newName = document.getElementById('cfgFishName').value.trim() || "Profil Ikan";
+
+      profilesState.list[id] = {
+        nama: newName,
+        suhu_min: parseFloat(document.getElementById('cfgTempMin').value),
+        suhu_max: parseFloat(document.getElementById('cfgTempMax').value),
+        ph_min: parseFloat(document.getElementById('cfgPhMin').value),
+        ph_max: parseFloat(document.getElementById('cfgPhMax').value),
+        turbidity_max: clamp(parseFloat(document.getElementById('cfgNtuMax').value), 0, 100),
+        trend_threshold: clamp(parseFloat(document.getElementById('cfgTrendTh').value), 0, 100)
+      };
+
+      isEditingConfig = false;
+      renderProfileUI();
+      await syncProfilesAndActiveConfigToFirebase();
+      showConfigFeedback("Perubahan profil tersimpan ke NVS!");
+    }
+
+    async function createNewProfile() {
+      const keys = Object.keys(profilesState.list);
+      if (keys.length >= MAX_FISH_PROFILES) return;
+
+      // ID unik dibuat dari waktu now
+      const newId = "ikan_" + Date.now().toString(36);
+      const slotNumber = keys.length + 1;
+
+      profilesState.list[newId] = {
+        nama: "Ikan Baru #" + slotNumber,
+        suhu_min: 24.0, suhu_max: 28.0,
+        ph_min: 6.5, ph_max: 7.5,
+        turbidity_max: 25, trend_threshold: 5
+      };
+
+      profilesState.active_id = newId;
+      isEditingConfig = false;
+      renderProfileUI();
+      await syncProfilesAndActiveConfigToFirebase();
+      showConfigFeedback("Profil baru dibuat! Silakan ubah nama & parameter.");
+    }
+
+    async function deleteActiveProfile() {
+      const keys = Object.keys(profilesState.list);
+      if (keys.length <= 1) return; // minimal harus ada 1 profil
+
+      delete profilesState.list[profilesState.active_id];
+      profilesState.active_id = Object.keys(profilesState.list)[0];
+
+      isEditingConfig = false;
+      renderProfileUI();
+      await syncProfilesAndActiveConfigToFirebase();
+      showConfigFeedback("Profil dihapus.");
+    }
+
+    // =====================================================
+    // 7. DATA SENSOR DARI ESP32
+    // =====================================================
+
+    // ESP32 dianggap online kalau uptime_ms-nya masih berubah dalam 10 detik terakhir
+    function checkEspOnline(data) {
+      let currentUptime = data.uptime_ms;
+      if (currentUptime === undefined || currentUptime === null) {
+        currentUptime = JSON.stringify(data); // cadangan kalau tidak ada uptime_ms
+      }
+
+      const now = Date.now();
+
+      if (lastUptimeMs === null) {
+        lastUptimeMs = currentUptime;
+      } else if (currentUptime !== lastUptimeMs) {
+        lastUptimeMs = currentUptime;
+        lastDataTimestamp = now;
+      }
+
+      return (lastDataTimestamp > 0) && ((now - lastDataTimestamp) < 10000);
+    }
+
+    // Tampilkan angka suhu, pH, NTU. Mengembalikan nilainya untuk grafik
+    function renderSensorValues(data) {
+      const temperature = Number(data.suhu || 0);
+      const ph = Number(data.ph || 0);
+      const ntu = clamp(Number(data.turbidity || 0), 0, 100);
+
+      document.getElementById('valTemp').textContent = temperature.toFixed(1);
+      document.getElementById('valPh').textContent = ph.toFixed(2);
+      document.getElementById('valNtu').textContent = Math.round(ntu);
+
+      // Sumber data: sensor asli atau simulasi
+      updateSourceBadge('tempSourceBadge', data.suhu_sumber || 'DS18B20');
+      updateSourceBadge('phSourceBadge', data.ph_sumber || 'PH-4502C');
+      updateSourceBadge('ntuSourceBadge', data.turbidity_sumber || 'TSW-30');
+
+      return { temperature: temperature, ph: ph, ntu: ntu };
+    }
+
+    // Banner hasil evaluasi: warna merah kalau abnormal, hijau kalau normal
+    function renderEvaluation(data) {
+      const banner = document.getElementById('evalBanner');
+      const badge = document.getElementById('evalStatusBadge');
+
+      // Buang kode rule seperti "[R1, R3] " dari teks rekomendasi
+      const recommendation = (data.rekomendasi || '-').replace(/\[R\d+(?:,\s*R\d+)*\]\s*/g, '');
+      document.getElementById('evalRecommendation').textContent = recommendation;
+      document.getElementById('lastUpdateText').textContent = new Date().toLocaleTimeString('id-ID');
+
+      // Kalau ESP32 masih kirim kata "PARAM", ganti jadi "KONDISI"
+      const statusText = (data.status_ringkas || "").replace(/PARAM/gi, "KONDISI");
+
+      if (data.is_abnormal) {
+        banner.className = "glass-card rounded-2xl p-5 border-l-4 border-l-rose-500 transition-all space-y-4";
+        badge.className = "px-2.5 py-0.5 rounded-md text-xs font-bold uppercase tracking-wider bg-rose-500/20 text-rose-300 border border-rose-500/30";
+        badge.textContent = statusText || "ABNORMAL";
+      } else {
+        banner.className = "glass-card rounded-2xl p-5 border-l-4 border-l-emerald-500 transition-all space-y-4";
+        badge.className = "px-2.5 py-0.5 rounded-md text-xs font-bold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30";
+        badge.textContent = statusText || "SEMUA NORMAL";
+      }
+    }
+
+    // Tampilkan badge rule yang aktif. Rule abnormal merah, sisanya biru
+    function renderActiveRules(data) {
+      const rulesRaw = (data.active_rules || "").trim();
+      const container = document.getElementById('evalRulesContainer');
+
+      if (rulesRaw === "") {
+        container.innerHTML = '<span class="mono text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">-</span>';
+        return;
+      }
+
+      const abnormalRules = ["R1", "R3", "R4", "R6", "R8", "R9", "R10"];
+      const ruleList = rulesRaw.split(/\s+/); // contoh "R1 R3" -> ["R1", "R3"]
+      let html = "";
+
+      ruleList.forEach(function (r) {
+        let cls;
+        if (abnormalRules.includes(r)) {
+          cls = "mono text-xs font-bold px-2 py-0.5 rounded bg-rose-500/15 text-rose-300 border border-rose-500/30";
+        } else {
+          cls = "mono text-xs font-bold px-2 py-0.5 rounded bg-sky-500/15 text-sky-300 border border-sky-500/30";
+        }
+        html += '<span class="' + cls + '">' + r + '</span>';
+      });
+
+      container.innerHTML = html;
+    }
+
+    // Fungsi utama: ambil /sensor.json lalu perbarui seluruh tampilan
+    async function fetchSensorData() {
+      try {
+        const res = await fetch(FIREBASE_HOST + "/sensor.json", { cache: "no-store" });
+        if (!res.ok) throw new Error("HTTP error");
+        const data = await res.json();
+
+        updateCloudUI(true); // berhasil connect ke Firebase
+
+        // Node /sensor masih kosong
+        if (!data) {
+          updateEspUI(false);
+          return;
+        }
+
+        const espOnline = checkEspOnline(data);
+        updateEspUI(espOnline);
+
+        const values = renderSensorValues(data);
+
+        // Info status pH MOSFET dari ESP32
+        livePhMosfetActive = !!data.ph_mosfet_aktif;
+        livePhState = data.ph_state || (livePhMosfetActive ? "SAMPLING" : "STANDBY");
+        if (typeof data.ph_sisa_detik === "number") {
+          livePhRemainingSeconds = data.ph_sisa_detik;
+        }
+        renderMosfetCounter();
+
+        renderEvaluation(data);
+        renderActiveRules(data);
+
+        // Grafik hanya diisi kalau ESP32 online
+        if (espOnline) {
+          addPointToChart(values.temperature, values.ph, values.ntu);
+        }
+
+      } catch (err) {
+        // Gagal ambil data -> anggap cloud dan ESP32 terputus
+        updateCloudUI(false);
+        updateEspUI(false);
+      }
+    }
+
+    // =====================================================
+    // 8. SIMULASI SENSOR (untuk uji rule R1 - R10)
+    // =====================================================
+
+    // Ambil kondisi simulasi dari Firebase, lalu tampilkan di checkbox & slider
+    async function loadSimulation() {
+      if (isEditingSim) return; // user lagi menggeser slider, jangan ditimpa
+
+      try {
+        const res = await fetch(FIREBASE_HOST + "/simulasi.json", { cache: "no-store" });
+        const sim = await res.json();
+        if (!sim) return;
+
+        document.getElementById('simOvTemp').checked = !!sim.override_suhu;
+        document.getElementById('simOvPh').checked = !!sim.override_ph;
+        document.getElementById('simOvNtu').checked = !!sim.override_turbidity;
+        document.getElementById('simTrendR9').checked = !!sim.trigger_trend_r9;
+
+        const temperature = clamp(valueOrDefault(sim.suhu, 26.5), 0, 100);
+        const ph = clamp(valueOrDefault(sim.ph, 7.2), 0, 14);
+        const ntu = clamp(valueOrDefault(sim.turbidity, 12), 0, 100);
+
+        document.getElementById('simSliderTemp').value = temperature;
+        document.getElementById('simValTempLabel').textContent = Number(temperature).toFixed(1) + " °C";
+
+        document.getElementById('simSliderPh').value = ph;
+        document.getElementById('simValPhLabel').textContent = Number(ph).toFixed(1);
+
+        document.getElementById('simSliderNtu').value = ntu;
+        document.getElementById('simValNtuLabel').textContent = Math.round(ntu) + " NTU";
+      } catch (e) {
+        // abaikan, nanti dicoba lagi
+      }
+    }
+
+    // Kirim kondisi simulasi ke Firebase. Pakai debounce 200 ms supaya
+    // tidak mengirim berkali-kali saat slider digeser
+    function pushSimulation() {
+      isEditingSim = true;
+      clearTimeout(simDebounceTimer);
+
+      simDebounceTimer = setTimeout(async function () {
+        const payload = {
+          override_suhu: document.getElementById('simOvTemp').checked,
+          override_ph: document.getElementById('simOvPh').checked,
+          override_turbidity: document.getElementById('simOvNtu').checked,
+          suhu: clamp(parseFloat(document.getElementById('simSliderTemp').value), 0, 100),
+          ph: clamp(parseFloat(document.getElementById('simSliderPh').value), 0, 14),
+          turbidity: clamp(parseFloat(document.getElementById('simSliderNtu').value), 0, 100),
+          trigger_trend_r9: document.getElementById('simTrendR9').checked
+        };
+
+        await fetch(FIREBASE_HOST + "/simulasi.json", {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        // Ambil data sensor lagi supaya efek simulasi cepat terlihat
+        setTimeout(fetchSensorData, 900);
+        setTimeout(function () { isEditingSim = false; }, 1200);
+      }, 200);
+    }
+
+    // Matikan semua override sekaligus
+    function disableAllSimulations() {
+      document.getElementById('simOvTemp').checked = false;
+      document.getElementById('simOvPh').checked = false;
+      document.getElementById('simOvNtu').checked = false;
+      document.getElementById('simTrendR9').checked = false;
+      pushSimulation();
+    }
+
+    // =====================================================
+    // 9. EVENT & POLLING
+    // =====================================================
+
+    // Saat user klik salah satu input di form profil, hentikan auto-refresh form
+    document.querySelectorAll('#configForm input').forEach(function (inp) {
+      inp.addEventListener('focus', function () {
+        isEditingConfig = true;
+      });
+    });
+
+    // Polling data sensor tiap 1,2 detik
+    async function sensorPollLoop() {
+      await fetchSensorData();
+      setTimeout(sensorPollLoop, 1200);
+    }
+
+    // Polling profil dan simulasi tiap 4 detik (tidak perlu secepat sensor)
+    async function profileSimPollLoop() {
+      await loadProfiles();
+      await loadSimulation();
+      setTimeout(profileSimPollLoop, 4000);
+    }
+
+    // =====================================================
+    // 10. MULAI
+    // =====================================================
+    renderProfileUI();
+    sensorPollLoop();
+    profileSimPollLoop();
+    setInterval(renderMosfetCounter, 1000); // hitung mundur MOSFET jalan tiap detik
+  </script>
+</body>
+</html>
